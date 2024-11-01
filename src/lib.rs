@@ -893,65 +893,12 @@ impl <W: AsyncWrite + Unpin> Request<W> {
 		&mut self.data
 	}
 
-	/// Processes a FastCGI request.
-	///
-	/// As soon as a request is completely received it is returned by
-	/// [`Requests::next`]. Calling `process` on this request allows the request
-	/// to be processed. The application logic is passed to `process` via a
-	/// callback function.
-	///
-	/// The callback function gets a reference to the [`Request`] instance that
-	/// contains all necessary information (input-/output-streams, parameters,
-	/// etc.) for processing the request.
-	///
-	/// See the examples directory for a complete example for using this function.
-	///
-	/// ## Callback function
-	///
-	/// The callback function can access all information about the request via
-	/// the passed `request` parameter. The return value can be one of the
-	/// following values:
-	///
-	/// - [`RequestResult::Complete`]
-	/// - [`RequestResult::Overloaded`]
-	/// - [`RequestResult::UnknownRole`]
-	///
-	/// ## Example
-	///
-	/// ```rust
-	/// # use tokio::io::{empty, sink};
-	/// # use std::io::Read;
-	/// # use tokio_fastcgi::{Requests, RequestResult};
-	/// # #[tokio::main]
-	/// # async fn main() {
-	/// # let instream = empty();
-	/// # let outstream = sink();
-	/// let mut requests = Requests::new(instream, outstream, 1, 1);
-	///
-	/// while let Some(request) = requests.next().await.expect("Request could not be constructed.") {
-	///   request.process(|request| async move {
-	///
-	///     // Process request
-	///
-	///     RequestResult::Complete(0)
-	///   });
-	/// }
-	/// # }
-	/// ```
-	pub async fn process<F: Future<Output = RequestResult>, C: FnOnce(Arc<Self>) -> F>(self, callback: C) -> Result<(), Error> {
-		let rc_self = Arc::from(self);
+	/// Terminate the request and close the resources.
+	pub async fn close(self, result: RequestResult) -> Result<(), Error> {
+		self.get_stdout().close().await?;
+		self.get_stderr().close().await?;
 
-		let result = callback(rc_self.clone()).await;
-
-		if let Ok(this) = Arc::try_unwrap(rc_self) {
-			this.get_stdout().close().await?;
-			this.get_stderr().close().await?;
-
-			this.orw.write_finish(result).await?;
-		} else {
-			panic!("StdErr or StdOut leaked out of process.")
-		}
-
+		self.orw.write_finish(result).await?;
 		Ok(())
 	}
 }
@@ -1334,30 +1281,5 @@ impl <W: AsyncWrite + Unpin> OutStream<W> {
 		self.closed = true;
 
 		Ok(())
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-	use tokio_test::io::Builder;
-
-	fn is_send<T: Send>(_: T) { }
-
-	/// Verify that the future created by process is Send to allow using it
-	/// with Tokio.
-	#[test]
-	fn check_send() {
-		is_send(async move {
-			let mut requests = Requests::new(Builder::new().build(), Builder::new().build(), 10, 10);
-
-			is_send(&requests);
-
-			while let Ok(Some(request)) = requests.next().await {
-				request.process(|_request| async move {
-					RequestResult::Complete(0)
-				}).await.unwrap();
-			}
-		});
 	}
 }
