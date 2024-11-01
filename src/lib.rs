@@ -11,7 +11,7 @@ use std::io::{Cursor, Read, Write};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::Mutex;
 use std::convert::TryFrom;
 use byteorder::{BigEndian, ReadBytesExt};
 use std::future::Future;
@@ -33,10 +33,6 @@ type ParamsIterator<'i> = dyn Iterator<Item=(&'i str, &'i [u8])> + 'i;
 
 /// Types for the parameter iterator with string conversion
 type StrParamsIterator<'i> = dyn Iterator<Item=(&'i str, Option<&'i str>)> + 'i;
-
-/// Type returned by [`get_stdin`](Request::get_stdin) and [`get_data`](Request::get_data).
-/// It makes passing around the streams easier.
-pub type OwnedInStream<'a> = MutexGuard<'a, InStream>;
 
 /// Error type for TryFrom on StdReqType and SysReqType
 #[derive(Debug)]
@@ -503,8 +499,8 @@ pub struct Request <W: AsyncWrite + Unpin> {
 	params: HashMap<String, Vec<u8>>,
 	params_done: bool,
 	orw: Arc<OutRecordWriter<W>>,
-	stdin: Mutex<InStream>,
-	data: Mutex<InStream>
+	stdin: InStream,
+	data: InStream
 }
 
 impl <W: AsyncWrite + Unpin> Request<W> {
@@ -519,8 +515,8 @@ impl <W: AsyncWrite + Unpin> Request<W> {
 					params: HashMap::new(),
 					params_done: false,
 					orw: Arc::from(OutRecordWriter::new(writer, record.request_id)),
-					stdin: Mutex::from(InStream::new(role == Role::Authorizer)), // Authorizers do not get an stdin stream
-					data: Mutex::from(InStream::new(role != Role::Filter)),      // Only filters get a data stream
+					stdin: InStream::new(role == Role::Authorizer), // Authorizers do not get an stdin stream
+					data: InStream::new(role != Role::Filter),      // Only filters get a data stream
 					role,
 					keep_connection,
 					request_id: record.request_id
@@ -862,8 +858,8 @@ impl <W: AsyncWrite + Unpin> Request<W> {
 	/// });
 	/// # } }
 	/// ```
-	pub fn get_stdin(&self) -> OwnedInStream {
-		self.stdin.try_lock().expect(ERR_LOCK_FAILED)
+	pub fn get_stdin(&mut self) -> &mut InStream {
+		&mut self.stdin
 	}
 
 	/// Allows the process closure to read from the Data stream.
@@ -893,8 +889,8 @@ impl <W: AsyncWrite + Unpin> Request<W> {
 	/// });
 	/// # } }
 	/// ```
-	pub fn get_data(&self) -> OwnedInStream {
-		self.data.try_lock().expect(ERR_LOCK_FAILED)
+	pub fn get_data(&mut self) -> &mut InStream {
+		&mut self.data
 	}
 
 	/// Processes a FastCGI request.
